@@ -25,4 +25,5 @@ Package.registerBuildPlugin({
 Package.onUse(function (api) {
 	api.versionsFrom('1.2.0.1');
 	api.use('isobuild:compiler-plugin@1.0.0');
+	api.use('isobuild:minifier-plugin@1.0.0')
 });

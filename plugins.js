@@ -6,9 +6,10 @@ Plugin.registerCompiler({
 	return new JsCompiler();
 });
 
-Plugin.registerCompiler({
-	extensions: ["mss"],
-	archMatching: 'web'
+
+Plugin.registerMinifier({
+	extensions: ["css"]
 }, function () {
-	return new CssModulesCompiler(Plugin);
+	return new CssModulesBuildPlugin(Plugin);
+
 });

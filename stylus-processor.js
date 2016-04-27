@@ -1,12 +1,11 @@
+import Future from 'fibers/future';
+import stylus from 'stylus';
 import path from 'path';
 import fs from 'fs';
-import sass from 'node-sass';
 import IncludedFile from './included-file';
-import pluginOptionsWrapper from './options';
+import pluginOptions from './options';
 
-const pluginOptions = pluginOptionsWrapper.options;
-
-export default class ScssProcessor {
+export default class StylusProcessor {
 	constructor(root, allFiles) {
 		this.root = root;
 		this.fileCache = {};
@@ -41,7 +40,7 @@ export default class ScssProcessor {
 		function importModule(importPath) {
 			try {
 				if (!path.extname(importPath))
-					importPath += '.scss';
+					importPath += '.styl';
 
 				let file = allFiles.get(importPath);
 				if (!file && path.basename(file).indexOf('_' === -1))
@@ -51,37 +50,34 @@ export default class ScssProcessor {
 			} catch (err) {
 				console.error(err);
 				file.error({
-					message: `CSS modules SCSS compiler error: file not found: (${importPath}): ${JSON.stringify(err, Object.getOwnPropertyNames(err))}\n`,
+					message: `CSS modules Stylus compiler error: file not found: (${importPath}): ${JSON.stringify(err, Object.getOwnPropertyNames(err))}\n`,
 					sourcePath: file.getDisplayPath()
 				});
 				return;
 			}
 		}
-
 	}
 
 	load(sourceFile) {
 		const allFiles = this.allFiles;
+		const future = new Future();
+		const resolver = future.resolver();
 		const options = {
-			sourceMap: true,
-			sourceMapContents: true,
-			sourceMapEmbed: false,
-			sourceComments: false,
-			sourceMapRoot: '.',
-			indentedSyntax: sourceFile.file.getExtension() === 'sass',
-			outFile: `.${sourceFile.file.getBasename()}`,
-			importer: importer.bind(this),
-			includePaths: [],
-			file: sourceFile.path,
-			data: sourceFile.contents
+			filename: sourceFile.path,
+			sourcemap: {
+				comment: false
+			}
 		};
 
-		// Empty options.data workaround from fourseven:scss
-		if (!options.data.trim())
-			options.data = '$fakevariable : blue;';
+		stylus.render(sourceFile.contents, options, function(err, css) {
+			if (err) {
+				return resolver(err);
+			}
 
-		const output = sass.renderSync(options);
-		return {sourceContent: output.css.toString('utf-8'), sourceMap: output.map};
+			resolver(null, {sourceContent: css, sourceMap: stylus.sourcemap});
+		});
+
+		return future.wait();
 
 		function importer(sourceFilePath, relativeTo) {
 			const sourceFile = getSourceContents(this.fileCache, sourceFilePath, relativeTo);

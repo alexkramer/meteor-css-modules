@@ -36,6 +36,11 @@ This can be configured by setting the `extensions` property in the cssModules co
 To enable Sass compilation, set the aforementioned `extensions` property to `['scss', 'sass']`.
 If you are using a different file extension, set it in the `extensions` property, and also set the `enableSassCompilation` property, which defaults to `['scss', 'sass']`.
 
+## New: Stylus support!
+
+To enable Stylus compilation, set the aforementioned `extensions` property to `['m.styl']`.
+If you are using a different file extension, set it in the `extensions` property, and also set the `enableStylusCompilation` property, which defaults to `['m.styl']`.
+
 
 ## Usage
 
@@ -57,7 +62,7 @@ If you are using a different file extension, set it in the `extensions` property
 
 ***hello.js***
 ``` js
-import styles from "{}/hello.mss";
+import styles from "/hello.mss";
 
 Template.hello.helpers({
     styles: styles
@@ -69,13 +74,6 @@ Template.hello.helpers({
 <template name="hello">
   <button class="{{styles.hello}}">Click Me</button>
 </template>
-```
-
-***Alternative JS import syntax***
-``` js
-Template.hello.helpers({
-    styles: CssModules.import("{}/hello.mss")
-});
 ```
 
 ### Relative Imports
@@ -93,16 +91,6 @@ you can do the following:
 ***hello.js***
 ``` js
 import styles from "./hello.mss";
-
-Template.hello.helpers({
-    styles: styles
-});
-```
-
-
-This will be converted to:
-``` js
-var styles = CssModules.import("{}/client/hello.mss");
 
 Template.hello.helpers({
     styles: styles
@@ -129,7 +117,7 @@ Here is my standard plugin list (in load order):
 
 **How to load other PostCSS plugins or customize plugin options**
 You can load plugins by adding them to the dependencies or devDependencies in the [package.json](https://github.com/nathantreid/css-modules-demo-meteor-1.3/blob/master/package.json#L13) file,
-then also listing them under a cssModules { plugins { } } entry in the [same file](https://github.com/nathantreid/css-modules-demo-meteor-1.3/blob/master/package.json#L26).
+then also listing them under a cssModules { postcssPlugins { } } entry in the [same file](https://github.com/nathantreid/css-modules-demo-meteor-1.3/blob/master/package.json#L26).
 
 ``` js
 {
@@ -137,7 +125,7 @@ then also listing them under a cssModules { plugins { } } entry in the [same fil
     "postcss-simple-vars": "1.1.0"
   },
   "cssModules": {
-    "plugins": {
+    "postcssPlugins": {
       "postcss-simple-vars": {}
     }
   }
@@ -154,7 +142,7 @@ To set inline options, specify them under the plugin entry like so:
 
 ``` js
   "cssModules": {
-    "plugins": {
+    "postcssPlugins": {
       "my-postcss-plugin": {
         "inlineOptions": {
           "option1": true
@@ -166,7 +154,7 @@ To set inline options, specify them under the plugin entry like so:
 To reference options from a file, specify them under the plugin entry like so:
 ``` js
   "cssModules": {
-    "plugins": {
+    "postcssPlugins": {
       "my-postcss-plugin": {
         "fileOptions": [
           "path/to/file1",

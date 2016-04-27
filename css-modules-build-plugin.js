@@ -1,14 +1,17 @@
 import path from 'path';
-import Future from 'fibers/future';
 import LRU from 'lru-cache';
-import recursive from 'recursive-readdir';
+import { Meteor } from 'meteor/meteor';
+import recursiveUnwrapped from 'recursive-readdir';
 import ScssProcessor from './scss-processor';
+import StylusProcessor from './stylus-processor';
 import CssModulesProcessor from './css-modules-processor';
 import IncludedFile from './included-file';
-import pluginOptions from './options';
 import plugins from './postcss-plugins';
+import pluginOptionsWrapper,{ reloadOptions } from './options';
 import getOutputPath from './get-output-path';
 
+let pluginOptions = pluginOptionsWrapper.options;
+recursive = Meteor.wrapAsync(recursiveUnwrapped);
 // clock function thanks to NextLocal: http://stackoverflow.com/a/34970550/1090626
 function clock(start) {
 	if (!start) return process.hrtime();
@@ -41,58 +44,35 @@ export default class CssModulesBuildPlugin extends CachingCompiler {
 	}
 
 	processFilesForTarget(files) {
+
+		pluginOptions = reloadOptions();
+
 		const start = profile();
 		files = addFilesFromIncludedFolders(files);
 		const allFiles = createAllFilesMap(files);
 		const uncachedFiles = processCachedFiles.call(this, files);
 		if (pluginOptions.enableSassCompilation)
 			compileScssFiles.call(this, uncachedFiles);
+		if (pluginOptions.enableStylusCompilation)
+			compileStylusFiles.call(this, uncachedFiles);
 		compileCssModules.call(this, uncachedFiles);
 
 		profile(start, 'compilation complete in');
 
 		function processCachedFiles(files) {
-			const cacheMisses = [];
 			const filesToProcess = [];
 			files.forEach(inputFile => {
-				const cacheKey = this._deepHash(this.getCacheKey(inputFile));
-				let compileResult = this._cache.get(cacheKey);
-
-				if (!compileResult) {
-					compileResult = this._readCache(cacheKey);
-					if (compileResult) {
-						this._cacheDebug(`Loaded ${ inputFile.getDisplayPath() }`);
-					}
-				}
-
-				if (!compileResult) {
-					cacheMisses.push(inputFile.getDisplayPath());
-					inputFile.cacheKey = cacheKey;
-					filesToProcess.push(inputFile);
-				}
-				else
-					this.addCompileResult(inputFile, compileResult);
+				filesToProcess.push(inputFile);
 			});
-
-			if (this._cacheDebugEnabled) {
-				cacheMisses.sort();
-				this._cacheDebug(
-					`Ran (#${ ++this._callCount }) on: ${ JSON.stringify(cacheMisses) }`);
-			}
 
 			return filesToProcess;
 		}
 
 		function addFilesFromIncludedFolders(files) {
 			pluginOptions.explicitIncludes.map(folderPath=> {
-				const recursiveFuture = new Future();
-				recursive(folderPath, [onlyAllowExtensionsHandledByPlugin], function (err, includedFiles) {
-					if (err)
-						recursiveFuture.throw(err);
-					if (includedFiles)
-						files = files.concat(includedFiles.map(filePath=>new IncludedFile(filePath.replace(/\\/g, '/'), files[0])));
-					recursiveFuture.return();
-				});
+
+				const includedFiles = recursive(folderPath, [onlyAllowExtensionsHandledByPlugin]);
+				files = files.concat(includedFiles.map(filePath=>new IncludedFile(filePath.replace(/\\/g, '/'), files[0])));
 
 				function onlyAllowExtensionsHandledByPlugin(file, stats) {
 					let extension = path.extname(file);
@@ -100,8 +80,6 @@ export default class CssModulesBuildPlugin extends CachingCompiler {
 						extension = extension.substring(1);
 					return !stats.isDirectory() && pluginOptions.extensions.indexOf(extension) === -1;
 				}
-
-				recursiveFuture.wait();
 			});
 			return files;
 		}
@@ -159,6 +137,60 @@ export default class CssModulesBuildPlugin extends CachingCompiler {
 			}
 		}
 
+		function compileStylusFiles(files) {
+			const processor = new StylusProcessor('./', allFiles);
+			const isStylusRoot = (file)=>isStylus(file) && isRoot(file);
+			const compileFile = compileStylusFile.bind(this);
+			files.filter(isStylusRoot).forEach(compileFile);
+
+			function isStylus(file) {
+				if (pluginOptions.enableStylusCompilation === true)
+					return true;
+
+				return _.find(pluginOptions.enableStylusCompilation, (ext) => (
+					file.getPathInPackage().endsWith(ext)
+				))
+			}
+
+			function isRoot(inputFile) {
+				const fileOptions = inputFile.getFileOptions();
+				if (fileOptions.hasOwnProperty('isImport')) {
+					return !fileOptions.isImport;
+				}
+				return !hasUnderscore(inputFile.getPathInPackage());
+			}
+
+			function compileStylusFile(file) {
+				const contents = file.contents = file.getContentsAsString();
+				file.contents = `${pluginOptions.globalVariablesText}\n\n${contents || ''}`;
+
+				file.getContentsAsString = function getContentsAsStringWithGlobalVariables() {
+					return file.contents;
+				};
+
+				const source = {
+					path: ImportPathHelpers.getImportPathInPackage(file),
+					contents: file.getContentsAsString(),
+					file
+				};
+
+				let result;
+				try {
+					result = processor.process(file, source, './', allFiles);
+				} catch (err) {
+					file.error({
+						message: `CSS modules stylus compiler error: ${JSON.stringify(err, Object.getOwnPropertyNames(err))}\n`,
+						sourcePath: file.getDisplayPath()
+					});
+					return null;
+				}
+
+				file.getContentsAsString = function getContentsAsString() {
+					return result.source;
+				};
+			}
+		}
+
 		function compileCssModules(files) {
 			const processor = new CssModulesProcessor('./');
 			const isNotScssImport = (file) => !hasUnderscore(file.getPathInPackage());
@@ -174,8 +206,6 @@ export default class CssModulesBuildPlugin extends CachingCompiler {
 				return processor.process(source, './', allFiles)
 					.then(result => {
 						// Save what we've compiled.
-						this._cache.set(file.cacheKey, result);
-						this._writeCacheAsync(file.cacheKey, result);
 						this.addCompileResult(file, result);
 					}).await();
 			}
@@ -187,23 +217,44 @@ export default class CssModulesBuildPlugin extends CachingCompiler {
 	}
 
 	addCompileResult(file, result) {
-		if (result.source) {
-			file.addStylesheet({
-				data: result.source,
-				path: getOutputPath(file.getPathInPackage(), pluginOptions.outputCssFilePath) + '.css',
-				sourceMap: JSON.stringify(result.sourceMap),
-				lazy: false
-			});
+		const filePath = file.getPathInPackage();
+		const isLazy = filePath.split('/').indexOf('imports') >= 0;
+		const shouldAddStylesheet = file.getArch().indexOf('web') === 0;
+
+		if (!isLazy && shouldAddStylesheet) {
+			if (result.source) {
+				file.addStylesheet({
+					data: result.source,
+					path: getOutputPath(filePath, pluginOptions.outputCssFilePath) + '.css',
+					sourceMap: JSON.stringify(result.sourceMap),
+					lazy: false
+				});
+			}
 		}
 
-		if (result.tokens) {
+		const importsCode = result.imports
+			? result.imports.map(importPath=>`import '${importPath}';`).join('\n')
+			: '';
+		const stylesheetCode = (isLazy && shouldAddStylesheet && result.source)
+			? `import modules from 'meteor/modules';
+					 modules.addStyles(${JSON.stringify(result.source)});`
+			: '';
+
+		const tokensCode = result.tokens
+			? `const styles = ${JSON.stringify(result.tokens)};
+					 export { styles as default, styles };`
+			: '';
+
+		if (stylesheetCode || tokensCode) {
 			file.addJavaScript({
-				data: Babel.compile('' +
-					`const styles = ${JSON.stringify(result.tokens)};
-							 export { styles as default, styles };`).code,
-				path: getOutputPath(file.getPathInPackage(), pluginOptions.outputJsFilePath) + '.js',
-				sourcePath: getOutputPath(file.getPathInPackage(), pluginOptions.outputJsFilePath) + '.js',
-				lazy: false,
+				data: Babel.compile(
+					`
+					${importsCode}
+					${stylesheetCode}
+					${tokensCode}`).code,
+				path: getOutputPath(filePath, pluginOptions.outputJsFilePath),
+				sourcePath: getOutputPath(filePath, pluginOptions.outputJsFilePath),
+				lazy: isLazy,
 				bare: false,
 			});
 		}
